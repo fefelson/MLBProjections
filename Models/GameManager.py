@@ -5,92 +5,19 @@ import json
 import datetime
 from pprint import pprint
 
+from MLBProjections.MLBProjections.Models.BaseballTeam import BaseballTeam
+from MLBProjections.MLBProjections.Models.BaseballDiamond import BaseballDiamond
 from MLBProjections.MLBProjections.Models.PA import PlateAppearance
 from MLBProjections.MLBProjections.Models.Umpire import Umpire
 from MLBProjections.MLBProjections.Models.TicketManager import TicketManager
 import MLBProjections.MLBProjections.Environ as ENV
 import MLBProjections.MLBProjections.DB.MLB as DB
-from MLBProjections.MLBProjections.Models.Ticket import Out, Single, Double, Triple, HomeRun, Walk, StrikeOut, DoublePlay
+import MLBProjections.MLBProjections.Models.Ticket as TK
 
 ################################################################################
 ################################################################################
 
 
-
-
-
-################################################################################
-################################################################################
-
-
-class BaseballTeam:
-
-    def __init__(self, db, teamId, startingPitcher, lineup, isHome=False):
-
-        self.teamId = teamId
-        self.currentPitcher = startingPitcher
-        self.isHome = isHome
-
-        self.lineup = lineup
-
-
-    def getPitcher(self):
-        return self.currentPitcher
-
-
-################################################################################
-################################################################################
-
-
-class BaseballDiamond:
-
-    def __init__(self):
-
-        self.firstBase = None
-        self.secondBase = None
-        self.thirdBase = None
-
-
-    def getBase(self, base):
-        return {"first":self.firstBase, "second":self.secondBase, "third":self.thirdBase}[base]
-
-
-    def getBasesLoaded(self):
-        return True if self.firstBase and self.secondBase and self.thirdBase else False
-
-
-    def setBase(self, base, playerId):
-        if base == "first":
-            self.firstBase = playerId
-        elif base == "second":
-            self.secondBase = playerId
-        else:
-            self.thirdBase = playerId
-
-
-    def clearBase(self, base):
-        if base == "first":
-            self.firstBase = None
-        elif base == "second":
-            self.secondBase = None
-        else:
-            self.thirdBase = None
-
-
-
-    def moveBase(self, base1, base2=None):
-        startBase = {"first":self.firstBase, "second":self.secondBase, "third":self.thirdBase}[base1]
-        playerId = startBase
-        self.clearBase(base1)
-
-        if base2:
-            self.setBase(base2, playerId)
-
-
-    def clearBases(self):
-        self.firstBase = None
-        self.secondBase = None
-        self.thirdBase = None
 
 
 
@@ -100,14 +27,11 @@ class BaseballDiamond:
 
 class BaseballGame(TicketManager):
 
-    def __init__(self, gameJson):
+    def __init__(self, db):
+        db.openDB()
+        self.gameId = db.curs.execute("SELECT game_id FROM games").fetchone()[0]
 
-        self.gameId = gameJson["gameId"]
-        self.db = DB.MLBDatabase()
-        self.db.openDB()
-        super().__init__(gameJson)
-
-
+        super().__init__(db)
 
 
 
@@ -118,29 +42,27 @@ class BaseballGame(TicketManager):
     def initializeSport(self):
 
         self.diamond = BaseballDiamond()
-        self.homeTeam = BaseballTeam(self.db, self.gameJson["homeTeam"]["teamId"], self.gameJson["homeTeam"]["starter"][0], self.gameJson["homeTeam"]["lineup"], True)
-        self.awayTeam = BaseballTeam(self.db, self.gameJson["awayTeam"]["teamId"], self.gameJson["awayTeam"]["starter"][0], self.gameJson["awayTeam"]["lineup"])
+        self.homeTeam = BaseballTeam(self.db, True)
+        self.awayTeam = BaseballTeam(self.db)
         self.umpire = Umpire(self)
 
 
-
     def runTicketMachine(self):
-        side = "away"
-        winCase = False
-        num = 1
 
-        while not self.umpire.endGame(winCase, side):
-            print("{} Inning {}".format(side, num))
+        self.umpire.setInning()
+
+
+        while not self.umpire.endGame():
+            # pprint(self.umpire.scoreKeeper.scoreBook.info)
+            # "home" or "away"
+
+
+
+            print("\n\n\n")
+            print("{} Inning {}".format(self.umpire.side, self.umpire.inning))
             print("{0[home]} Home - Away {0[away]}".format(self.umpire.scoreKeeper.scoreBook.score))
 
-
-            self.umpire.setSide(side)
-            self.newInning(side, winCase=winCase)
-            # Change side
-            side = "home" if side == "away" else "away"
-            num = num + 1 if side == "away" else num
-            if num == 9 and side == "home":
-                winCase = True
+            self.newInning()
 
         projJson = {"games":[]}
         projPath = ENV.getProjPath(self.gameId)
@@ -152,45 +74,66 @@ class BaseballGame(TicketManager):
 
         projJson["games"].append(self.umpire.scoreKeeper.scoreBook.info)
 
+
         with open(projPath, "w") as fileOut:
             json.dump(projJson, fileOut)
 
 
 
-    def newInning(self, side, winCase):
+    def newInning(self):
         self.diamond.clearBases()
         self.umpire.clearOuts()
-        self.umpire.scoreKeeper.flipBook(side)
-
-        pitcher = self.umpire.scoreKeeper.getPitcher()
+        self.umpire.scoreKeeper.flipBook()
 
 
-        while self.umpire.getOuts() < 3 and not self.umpire.endInning(winCase, side):
+
+        while self.umpire.getOuts() < 3 and not self.umpire.endInning():
             # print("{0[home]} Home - Away {0[away]}".format(self.umpire.scoreKeeper.scoreBook.score))
             # print("{} Outs".format(self.umpire.getOuts()))
-            # print("firstBase {}    secondBase {}    thirdBase {}".format(self.diamond.firstBase, self.diamond.secondBase, self.diamond.thirdBase))
+            print("firstBase {}    secondBase {}    thirdBase {}".format(self.diamond.firstBase, self.diamond.secondBase, self.diamond.thirdBase))
             # Tickets are generated and recorded until 3 outs are reached
-            batter = self.umpire.scoreKeeper.nextBatter()
+            pitcher = self.umpire.getPitcher()
+            batter = self.umpire.nextBatter()
             result = PlateAppearance(pitcher, batter, self.umpire).result
-
-            ticket = {"Out":self.out, "Single":self.single, "Double":self.double, "Triple":self.triple,
-                        "Home Run":self.homeRun, "Walk":self.walk, "Strikeout":self.strikeOut,
-                        "Double Play":self.doublePlay}[result]
+            # Dirty Hack
+            result = "Out" if not result else result
+            ##
+            ticket = {"Out":self.out, "Ground Out":self.groundOut, "Strike Out":self.strikeOut,
+                        "Single":self.single, "Fly Out":self.flyOut, "Walk":self.walk,
+                        "Line Out":self.lineOut, "Double":self.double, "Pop Out":self.popOut,
+                        "Home Run":self.homeRun, "Fielder's Choice":self.fielderChoice,
+                        "Double Play":self.doublePlay, "Fouled Out":self.foulOut,
+                        "Hit by Pitch":self.hbp, "Reached on Error":self.reachOnError,
+                        "Sacrifice":self.sacrifice, "Triple":self.triple, "Triple Play":self.triplePlay
+                    }.get(result, self.out)
 
             ticket.generateTicket(pitcher=pitcher, batter=batter)
             print("\n\n")
-
+        self.umpire.setInning()
 
 
     def setTicketTypes(self):
-        self.out = Out(self.diamond, self.umpire)
-        self.single = Single(self.diamond, self.umpire)
-        self.double = Double(self.diamond, self.umpire)
-        self.triple = Triple(self.diamond, self.umpire)
-        self.homeRun = HomeRun(self.diamond, self.umpire)
-        self.doublePlay = DoublePlay(self.diamond, self.umpire)
-        self.walk = Walk(self.diamond, self.umpire)
-        self.strikeOut = StrikeOut(self.diamond, self.umpire)
+        self.out = TK.Out(self.diamond, self.umpire)
+        self.groundOut = TK.GroundOut(self.diamond, self.umpire)
+        self.lineOut = TK.LineOut(self.diamond, self.umpire)
+        self.flyOut = TK.FlyOut(self.diamond, self.umpire)
+        self.popOut = TK.PopOut(self.diamond, self.umpire)
+        self.foulOut = TK.FoulOut(self.diamond, self.umpire)
+        self.strikeOut = TK.StrikeOut(self.diamond, self.umpire)
+        self.doublePlay = TK.DoublePlay(self.diamond, self.umpire)
+        self.triplePlay = TK.TriplePlay(self.diamond, self.umpire)
+        self.fielderChoice = TK.FielderChoice(self.diamond, self.umpire)
+        self.sacrifice = TK.Sacrifice(self.diamond, self.umpire)
+
+        self.single = TK.Single(self.diamond, self.umpire)
+        self.double = TK.Double(self.diamond, self.umpire)
+        self.triple = TK.Triple(self.diamond, self.umpire)
+        self.homeRun = TK.HomeRun(self.diamond, self.umpire)
+
+        self.walk = TK.Walk(self.diamond, self.umpire)
+        self.hbp = TK.HitByPitch(self.diamond, self.umpire)
+
+        self.reachOnError = TK.ReachOnError(self.diamond, self.umpire)
 
 
     def setTicketHolders(self):
@@ -205,6 +148,10 @@ if __name__ == "__main__":
     with open(ENV.getLineupPath(today)) as fileIn:
         matchups = json.load(fileIn)["matchups"]
 
-    for i, matchup in enumerate(matchups):
-        for n in range(15):
-            BaseballGame(matchup)
+        for n in range(20):
+            for i, matchup in enumerate(matchups):
+
+                if i not in (10, ):
+
+
+                    BaseballGame(matchup)

@@ -39,9 +39,11 @@ class Database(metaclass=ABCMeta):
         if not self.fetchOne(checkTableCmd):
             for table in self.getTableList():
                 self.executeCmd(createTableCmd.format(table))
-                if table.get("index", None):
-                    indexCmd = "CREATE INDEX idx_{0[name]} ON {0[tableName]} (" + table["index"] + ")"
-                    self.executeCmd(indexCmd.format({"name":table["tableName"], "tableName":table["tableName"]}))
+                if table.get("indexes", None):
+                    for name, index in table["indexes"]:
+                        # Not Great
+                        indexCmd = "CREATE INDEX idx_{0[name]} ON {0[tableName]} (" + index + ")"
+                        self.executeCmd(indexCmd.format({"name":name, "tableName":table["tableName"]}))
             self.seed()
             self.commit()
 
@@ -73,6 +75,15 @@ class Database(metaclass=ABCMeta):
         colCmd = ""+", ".join([col for col in cols])
         qMarks = ",".join(["?" for col in table["tableCols"]])
         self.executeCmd(insertCmd.format({"qMarks": qMarks, "tableName": table["tableName"], "colCmd": colCmd}), values)
+
+
+    def nextKey(self, data):
+        keyCmd = "SELECT MAX({0[pk]}) FROM {0[tableName]}".format(data)
+        try:
+            key = self.fetchOne(keyCmd)[0] + 1
+        except TypeError:
+            key = 1
+        return key
 
 
 

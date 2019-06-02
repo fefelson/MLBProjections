@@ -14,9 +14,9 @@ from pprint import pprint
 
 class TicketManager(metaclass=ABCMeta):
 
-    def __init__(self, gameJson):
+    def __init__(self, db):
 
-        self.gameJson = gameJson
+        self.db = db
         self.homeTeam = None
         self.awayTeam = None
 

@@ -3,16 +3,18 @@ from pprint import pprint
 from os import environ
 from json import load, dump
 from datetime import date, timedelta
-import sqlite3
+import MLBProjections.MLBProjections.DB.MLB as DB
+from itertools import chain
+
+from MLBProjections.MLBProjections.Models.DownloadManager import Roster, Player
 
 ###########################################
 
 matchupPath = environ["HOME"] +"/FEFelson/MLBProjections/Matchups/{}.json"
 lineupPath = environ["HOME"] +"/FEFelson/MLBProjections/Lineups/{}.json"
-dBPath = environ["HOME"] +"/FEFelson/MLBProjections/mlb.db"
 
-conn = sqlite3.connect(dBPath)
-curs = conn.cursor()
+mlbDB = DB.MLBDatabase()
+mlbDB.openDB()
 
 
 gameDate = date.today()
@@ -24,37 +26,17 @@ gameDate = date.today()
 ########  SQL Commands ##############################################
 
 
-starterCmd = """
-            SELECT player_id, first_name, last_name FROM pro_players
+nameCmd = """
+            SELECT first_name, last_name, bats, throws FROM pro_players
             WHERE player_id = ?
             """
 
 
-benchCmd = """
-            SELECT DISTINCT rosters.player_id, first_name, last_name FROM pro_players
-            INNER JOIN rosters ON pro_players.player_id = rosters.player_id
-            INNER JOIN results ON pro_players.player_id = results.batter_id
-            INNER JOIN games ON rosters.game_id = games.game_id
-            WHERE team_id = ?
-            ORDER BY last_name
-            """
-
-
-bullpenCmd = """
-            SELECT DISTINCT rosters.player_id, first_name, last_name FROM pro_players
-            INNER JOIN rosters ON pro_players.player_id = rosters.player_id
-            INNER JOIN results ON pro_players.player_id = results.pitcher_id
-            INNER JOIN games ON rosters.game_id = games.game_id
-            WHERE season = 2019 AND team_id = ?
-            ORDER BY last_name
-            """
-
-
 lineupCmd = """
-            SELECT lineups.player_id, first_name, last_name, batt_order, pos FROM lineups
+            SELECT lineups.player_id, first_name, last_name, batt_order, lineups.pos FROM lineups
             INNER JOIN pro_players ON lineups.player_id = pro_players.player_id
             INNER JOIN (SELECT team_id, MAX(game_id) AS game_id FROM lineups WHERE team_id = ?) AS max_id ON lineups.game_id = max_id.game_id AND lineups.team_id = max_id.team_id
-            WHERE sub_order = 1 AND pos != 'P'
+            WHERE sub_order = 1 AND lineups.pos != 'P'
             ORDER BY batt_order
             """
 
@@ -154,6 +136,11 @@ class Controller:
         self.view.lineup.Clear()
         for player in self.model.team.lineup:
             self.view.lineup.Append(str(player), player)
+        if len(self.model.team.lineup) !=9:
+            self.view.actionBtn.Disable()
+        else:
+            self.view.actionBtn.Enable()
+        self.view.Layout()
 
 
     def removeLineup(self, event):
@@ -163,7 +150,11 @@ class Controller:
         self.view.lineup.Clear()
         for player in self.model.team.lineup:
             self.view.lineup.Append(str(player), player)
-
+        if len(self.model.team.lineup) !=9:
+            self.view.actionBtn.Disable()
+        else:
+            self.view.actionBtn.Enable()
+        self.view.Layout()
 
 
 
@@ -219,7 +210,13 @@ class Team:
     def __init__(self, teamId, starter):
 
         self.teamId = teamId
-        self.starter = curs.execute(starterCmd,(starter,)).fetchone()
+        roster = Roster(teamId)
+
+        try:
+            self.starter = self.getPlayer(starter)
+        except AttributeError:
+            self.starter = (None, None, None)
+        
 
         self.batters = []
         self.pitchers = []
@@ -227,26 +224,42 @@ class Team:
 
 
         self.setLineup()
-        self.setBullpen()
-        self.setBench()
+        self.setBullpen(roster.info["pitchers"])
+        self.setBench(roster.info["batters"])
+
+
+
+    def getPlayer(self, playerId):
+        try:
+            firstName, lastName, bats, throws = mlbDB.curs.execute(nameCmd,(playerId,)).fetchone()
+        except TypeError:
+            player = Player(playerId)
+            firstName = player.info["first_name"]
+            lastName = player.info["last_name"]
+            bats = player.info["bats"]
+            throws = player.info["throws"]
+            mlbDB.insert(DB.proPlayersTable, [player.info[index] for index in DB.proPlayersTable["tableCols"]])
+            mlbDB.commit()
+            
+        return playerId, firstName, lastName, bats, throws
 
 
     def getJson(self):
-        return {"teamId": self.teamId, "starter": self.starter, "lineup": [ x[0] for x in self.lineup ]}
+        return {"teamId": self.teamId, "starter": self.starter, "lineup": [ x[0] for x in self.lineup ], "bullpen": self.pitchers, "bench":self.batters}
 
 
-    def setBench(self):
-        for playerId, firstName, lastName in curs.execute(benchCmd,(self.teamId,)).fetchall():
-            self.batters.append((playerId, firstName, lastName))
+    def setBench(self, players):
+        for playerId in players:
+            self.batters.append(self.getPlayer(playerId))
 
 
-    def setBullpen(self):
-        for playerId, firstName, lastName in curs.execute(bullpenCmd,(self.teamId,)).fetchall():
-            self.pitchers.append((playerId, firstName, lastName))
+    def setBullpen(self, players):
+        for playerId in players:
+            self.pitchers.append(self.getPlayer(playerId))
 
 
     def setLineup(self):
-        for playerId, firstName, lastName, battOrder, pos in curs.execute(lineupCmd, (self.teamId,)).fetchall():
+        for playerId, firstName, lastName, battOrder, pos in mlbDB.curs.execute(lineupCmd, (self.teamId,)).fetchall():
             self.lineup.append((playerId, firstName, lastName, battOrder, pos))
 
 
@@ -302,10 +315,10 @@ class View(wx.Frame):
         self.starter.SetLabel(str(self.team.starter))
 
 
-        for player in self.team.batters:
+        for player in sorted(chain(self.team.batters, self.team.pitchers),key=lambda x: x[2]):
             self.bench.Append(str(player), player)
 
-        for player in self.team.pitchers:
+        for player in sorted(self.team.pitchers,key=lambda x: x[2]):
             self.pitchers.Append(str(player), player)
 
         for player in self.team.lineup:
@@ -326,4 +339,4 @@ if __name__ == "__main__":
     app.MainLoop()
 
 
-    conn.close()
+    mlbDB.closeDB()
