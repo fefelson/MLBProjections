@@ -8,8 +8,8 @@ from pprint import pprint
 ################################################################################
 
 
-createTableCmd = "CREATE TABLE {0[tableName]} ( {0[tableCmd]} )"
-insertCmd = "INSERT INTO {0[tableName]} {0[colCmd]} VALUES( {0[qMarks]} )"
+
+insertCmd = "INSERT INTO {0[tableName]} VALUES( {0[qMarks]} )"
 checkTableCmd = "SELECT * FROM sqlite_master"
 
 
@@ -36,14 +36,14 @@ class Database(metaclass=ABCMeta):
             os.makedirs("/".join(self.filePath.split("/")[:-1]))
         self.conn = sqlite3.connect(self.filePath)
         self.curs = self.conn.cursor()
+
+        # If there are no tables
         if not self.fetchOne(checkTableCmd):
+            # Create tables
             for table in self.getTableList():
-                self.executeCmd(createTableCmd.format(table))
-                if table.get("indexes", None):
-                    for name, index in table["indexes"]:
-                        # Not Great
-                        indexCmd = "CREATE INDEX idx_{0[name]} ON {0[tableName]} (" + index + ")"
-                        self.executeCmd(indexCmd.format({"name":name, "tableName":table["tableName"]}))
+                self.executeCmd(table.createTableCmd())
+                for indexCmd in table.createIndexCmds():
+                    self.executeCmd(indexCmd)
             self.seed()
             self.commit()
 
@@ -63,6 +63,7 @@ class Database(metaclass=ABCMeta):
 
     def executeCmd(self, cmd, values=[]):
         #TODO: catch errors here?
+
         self.curs.execute(cmd, values)
 
 
@@ -71,18 +72,38 @@ class Database(metaclass=ABCMeta):
         return self.curs.fetchone()
 
 
-    def insert(self, table, values, cols=[]):
-        colCmd = ""+", ".join([col for col in cols])
-        qMarks = ",".join(["?" for col in table["tableCols"]])
-        self.executeCmd(insertCmd.format({"qMarks": qMarks, "tableName": table["tableName"], "colCmd": colCmd}), values)
+    def fetchAll(self, cmd, values=[]):
+        self.executeCmd(cmd, values)
+        return self.curs.fetchall()
 
 
-    def nextKey(self, data):
-        keyCmd = "SELECT MAX({0[pk]}) FROM {0[tableName]}".format(data)
+    def insert(self, table, *, info=None, values=None):
+        if not info and not values:
+            raise AssertionError("info dict or values list/tuple must be provided")
+        if not values:
+            values = [info.get(key, None) for key in table.getCols()]
+        qMarks = ",".join(["?" for col in table.getCols()])
+        self.executeCmd(insertCmd.format({"qMarks": qMarks, "tableName": table.getName()}), values)
+
+
+    def nextKey(self, table):
+        keyCmd = "SELECT MAX({}) FROM {}".format(table.getPk(), table.getName())
         try:
-            key = self.fetchOne(keyCmd)[0] + 1
+            key = int(self.fetchOne(keyCmd)[0]) + 1
         except TypeError:
-            key = 1
+            key = 0
+        return key
+
+
+    def getKey(self, table, **kwargs):
+        whereCmd = " AND ".join(["{}={}".format(key,value) for key, value in kwargs.items()])
+        keyCmd = "SELECT {} FROM {} WHERE {}".format(table.getPk(), table.getName(), whereCmd)
+        try:
+            key = self.fetchOne(keyCmd)[0]
+        except TypeError:
+            key = self.nextKey(table)
+            kwargs[table.getPk()] = key
+            self.insert(table, info=kwargs)
         return key
 
 

@@ -1,7 +1,10 @@
 from MLBProjections.MLBProjections.Models.ScoreKeeper import ScoreKeeper
+from itertools import chain
+from sklearn.naive_bayes import MultinomialNB as MultiReg
 
 import random
 import sqlite3
+import numpy
 from pprint import pprint
 
 ################################################################################
@@ -21,14 +24,11 @@ class Umpire:
     outcomes.
     """
 
-    def __init__(self, game):
+    def __init__(self, db):
 
-        self.game = game
-        self.db = game.db
-        self.scoreKeeper = ScoreKeeper(game)
+        self.db = db
+        self.scoreKeeper = ScoreKeeper(db)
         self.inning = 0
-        self.stadiumId = self.db.curs.execute("SELECT stadium_id FROM pro_teams WHERE team_id = ?", (self.game.homeTeam.teamId,)).fetchone()[0]
-
         self.winCase = False
 
         self.side = None
@@ -48,8 +48,8 @@ class Umpire:
 
 
     def endInning(self):
-        homeScore = self.scoreKeeper.scoreBook.score["home"]
-        awayScore = self.scoreKeeper.scoreBook.score["away"]
+        homeScore = self.scoreKeeper.scoreBook.scores["home"]
+        awayScore = self.scoreKeeper.scoreBook.scores["away"]
         gameOver = False
 
         if self.winCase and self.side == "home":
@@ -59,8 +59,8 @@ class Umpire:
 
 
     def endGame(self):
-        homeScore = self.scoreKeeper.scoreBook.score["home"]
-        awayScore = self.scoreKeeper.scoreBook.score["away"]
+        homeScore = self.scoreKeeper.scoreBook.scores["home"]
+        awayScore = self.scoreKeeper.scoreBook.scores["away"]
         gameOver = False
 
         if self.winCase:
@@ -76,46 +76,55 @@ class Umpire:
         return self.scoreKeeper.nextBatter()
 
 
+    def inningCheck(self, teamId, inning):
+        return self.db.fetchAll("SELECT pitcher_id, COUNT(pitcher_id) AS appearance FROM new_pitchers WHERE team_id = ? and inning = ? GROUP BY pitcher_id ORDER BY appearance DESC", (teamId, inning))
+
+
+
     def getPitcher(self):
         side = self.scoreKeeper.scoreBook.fieldingSide
-        pitcher = str(self.scoreKeeper.getPitcher())
+        pitcher = self.scoreKeeper.getPitcher()[0]
         stats = self.scoreKeeper.scoreBook.info[side]["p"].get(int(pitcher), None)
+        teamId = self.scoreKeeper.scoreBook.teams[side]
         #print(stats)
         if stats:
-            total = self.db.curs.execute("SELECT COUNT(pitcher_id) FROM removals WHERE pitcher_id = ?", (pitcher,)).fetchone()[0]
-            runRemove = self.db.curs.execute("SELECT COUNT(pitcher_id) FROM removals WHERE pitcher_id = ? AND runs <= ?", (pitcher, stats["R"])).fetchone()[0]
-            pitchRemove = self.db.curs.execute("SELECT COUNT(pitcher_id) FROM removals WHERE pitcher_id = ? AND pitch_num <= ?", (pitcher, stats["NUM"])).fetchone()[0]
-            #print(total, runRemove, pitchRemove)
-            if not total:
-                total = 1
-                runRemove = 1
-                pitchRemove = 1
-            if runRemove/total + pitchRemove/total >= 1.15:
-                team = self.game.homeTeam if side == "home" else self.game.awayTeam
-                bullpen = [x for x in team.bullpen]
-                cmd = "SELECT pitcher_id FROM new_pitchers WHERE team_id = ? AND inning <= ? AND pitcher_id in {}".format(str(tuple(bullpen)))
-                #pprint(cmd)
-                try:
-                    results = [x[0] for x in self.db.curs.execute(cmd, (team.teamId, self.inning,)).fetchall()]
-                    index = round(random.random() * (len(results)-1))
-                    num = results[index]
+            inning = self.inning
 
-                except (sqlite3.OperationalError, IndexError):
-                    pprint(cmd)
-                    num = 0
+            num = stats["NUM"]
+            r = stats["R"]
 
+
+            removeNum = self.db.fetchOne("SELECT COUNT(pitcher_id) FROM removals WHERE pitch_num <= ? AND pitcher_id = ?",(num,pitcher))[0]
+            removeCount = self.db.fetchOne("SELECT COUNT(pitcher_id) FROM removals WHERE pitcher_id = ?",(pitcher,))[0]
+            removeRun = self.db.fetchOne("SELECT COUNT(pitcher_id) FROM removals WHERE runs <= ? AND pitcher_id = ?",(r,pitcher))[0]
+
+
+            rn = (1+removeNum)/(2+removeCount)
+            rr = (1+removeRun)/(2+removeCount)
+
+
+            if rn*rr > .5:
                 newPitcher = None
-                for p in team.bullpen:
-                    if str(p) == str(num):
-                        newPitcher = p
-                        break
-                if not newPitcher:
-                    newPitcher = team.bullpen[0]
+                if len(self.scoreKeeper.scoreBook.bullpens[side]) > 1:
+                    while not newPitcher and inning >1:
+                        for playerId in [x[0] for x in self.inningCheck(teamId, inning)]:
+                            bullpen = [int(player[0]) for player in self.scoreKeeper.scoreBook.bullpens[side]]
+                            if int(playerId) in bullpen:
+                                index = bullpen.index(int(playerId))
+                                newPitcher = self.scoreKeeper.scoreBook.bullpens[side][index]
+                                print(newPitcher)
+                                break
+                        inning -= 1
+                        # if not newPitcher:
+                        #     newPitcher = team.bullpen[0]
 
-                #print(results)
-                #print("\n\nLength {}   Index {}".format(len(results), index))
-                team.setPitcher(newPitcher)
-                self.scoreKeeper.newPitcher(newPitcher)
+                        #print(results)
+                        #print("\n\nLength {}   Index {}".format(len(results), index))
+                    if not newPitcher:
+                        newPitcher = self.scoreKeeper.scoreBook.bullpens[side][0]
+
+                    self.scoreKeeper.newPitcher(newPitcher)
+
 
         return self.scoreKeeper.getPitcher()
 

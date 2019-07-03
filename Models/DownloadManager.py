@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import urllib.error as error
@@ -7,9 +8,9 @@ from bs4 import BeautifulSoup
 from http.client import IncompleteRead
 from time import sleep
 from urllib.request import urlopen, Request
-from datetime import date, datetime, timedelta
 
 import MLBProjections.MLBProjections.Environ as ENV
+from MLBProjections.MLBProjections.Utils.UpdateMixIn import UpdateMixIn
 
 # For debugging
 from pprint import pprint
@@ -65,77 +66,41 @@ def writeErrorMsg(fileName, url, msg):
         errorFile.write("{0[timestamp]}\t{0[url]}\t{0[msg]}\n".format(formating))
 
 
+def removeDownload(fileName):
+    os.remove(fileName)
+
+
 ################################################################################
 ################################################################################
 
 
-class DownloadManager:
+class DownloadManager(UpdateMixIn):
 
-    def __init__(self):
-        self.manager = {}
 
-        try:
-            with open(ENV.getManagerFile()) as fileIn:
-                self.manager = json.load(fileIn)
-        except FileNotFoundError:
-            pass
+    def getManagerKey(self):
+        return "gameResults"
 
 
     def update(self):
-        update = False
-        today = datetime.today()
-        checkDate = self.checkManager("gameResults")
-
-        try:
-            checkDate = datetime.strptime(checkDate, "%Y-%m-%d %H:%M:%S.%f")
-            if (date.fromtimestamp(today.timestamp()) - date.fromtimestamp(checkDate.timestamp())).days >= 1 and today.hour > 5:
-                update = True
-        except TypeError:
-            update = True
-            # Change to largest date in file system
-            checkDate = datetime(2019,3,20)
-
-        if update:
-            self.getGameDates(date.fromtimestamp(checkDate.timestamp()), date.fromtimestamp(today.timestamp()))
-            self.getMatchups(date.fromtimestamp(today.timestamp()))
-            self.updateManager("gameResults", str(today))
-            self.writeManager()
+        today = datetime.date.today()
+        if self.checkUpdate():
+            checkDate = self.getItem().date()
+        self.getGameDates(checkDate, today)
+        self.getMatchups(today)
+        self.updateManagerFile()
 
 
-
-    def updateManager(self, item, value):
-        self.manager[item] = value
-
-
-    def writeManager(self):
-        with open(ENV.getManagerFile(), "w") as fileOut:
-            json.dump(self.manager, fileOut)
-
-
-    def checkManager(self, item):
-        return self.manager.get(item, None)
-
-
-
-    def _getGameData(self, gameDate, endDate, scoreFunc=None, itemType=None):
-        while gameDate < endDate:
-            scoreboard = ScoreBoard(gameDate)
-            if scoreFunc:
-                for data in scoreFunc(scoreboard):
-                    itemType(gameDate, data)
-            gameDate += timedelta(1)
-
-
-    # Change Method name to gare result
     def getGameDates(self, startDate, endDate):
-        self._getGameData(startDate, endDate, ScoreBoard.getGameUrls, BoxScore)
+        while startDate < endDate:
+            for data in ScoreBoard(startDate).getGameUrls():
+                BoxScore(startDate, data)
+            startDate += datetime.timedelta(1)
 
 
+    def getMatchups(self, today):
+        for data in ScoreBoard(today, "pregame").getGameUrls():
+            Matchup(today, data)
 
-    def getMatchups(self, startDate):
-        gameDate = startDate
-        endDate = startDate + timedelta(3)
-        self._getGameData(startDate, endDate)
 
 
     def getPlayer(self, playerId):
@@ -213,7 +178,7 @@ class RecordableItem(metaclass=ABCMeta):
 
 class ScoreBoard(RecordableItem):
 
-    _fields = ["gameDate", "url"]
+    _fields = ["gameDate", "url", "gameType"]
 
     newGame = {"away_id":-1,
                 "home_id":-1,
@@ -224,8 +189,8 @@ class ScoreBoard(RecordableItem):
                 "status":None,
                 "url":None}
 
-    def __init__(self, gameDate):
-        super().__init__(gameDate, ENV.getScoreBoardUrl(gameDate))
+    def __init__(self, gameDate, gameType="final"):
+        super().__init__(gameDate, ENV.getScoreBoardUrl(gameDate), gameType)
 
 
     def downloadCondition(self):
@@ -239,7 +204,8 @@ class ScoreBoard(RecordableItem):
     def parseData(self):
         data = downloadItem(self.url)
         self.info["games"] = []
-        for game in [game for key, game in data["context"]["dispatcher"]["stores"]["GamesStore"]["games"].items() if "mlb" in key and game["game_type"] != "Preseason" and game["status_type"] == "final" ]:
+        for game in [game for key, game in data["context"]["dispatcher"]["stores"]["GamesStore"]["games"].items() if "mlb" in key and game["game_type"] != "Preseason" and game["status_type"] == self.gameType ]:
+
             gameData = ScoreBoard.newGame.copy()
             gameData["away_id"] = game["away_team_id"].split(".")[-1]
             gameData["home_id"] = game["home_team_id"].split(".")[-1]
@@ -340,7 +306,7 @@ class BoxScore(RecordableItem):
         try:
             self.info["season_type"] = gameData["series_type"]
         except KeyError:
-            pass
+            self.info["season_type"] = "reg"
 
         self.info["stadium_id"] = gameData["stadium_id"]
 
@@ -449,7 +415,7 @@ class Roster(RecordableItem):
         self.info["pitchers"] = []
         self.info["batters"] = []
         for player in [player for player in data["players"].values() if player["team_id"] == "mlb.t.{}".format(self.teamId) and not player.get("injury", None)]:
-            if "mlb.pos.1" in player["positions"].values():
+            if player["primary_position_id"] in ("mlb.pos.21", "mlb.pos.22"):
                 self.info["pitchers"].append(player["player_id"].split(".")[-1])
             else:
                 self.info["batters"].append(player["player_id"].split(".")[-1])
@@ -461,6 +427,60 @@ class Roster(RecordableItem):
 
     def writeCondition(self):
         return False
+
+
+################################################################################
+################################################################################
+
+
+class Matchup(RecordableItem):
+
+    _fields = ["gameDate", "gameId", "url"]
+
+    newLineup = {"player_type":"N/A",
+                    "order": -1,
+                    "player_id":-1,
+                    "position": [],
+                    "sub_order":-1}
+
+    def __init__(self, gameDate, url):
+        gameId = url.split("-")[-1].strip("/")
+        super().__init__(gameDate, gameId, ENV.mainUrl + url)
+
+
+    def downloadCondition(self):
+        return super().downloadCondition()
+
+
+    def parseData(self):
+        data = downloadItem(self.url)
+        pageData = data["context"]["dispatcher"]["stores"]["PageStore"]["pageData"]
+        # used as key in GamesStore
+        dataIndex = pageData["entityId"]
+        gameData = data["context"]["dispatcher"]["stores"]["GamesStore"]["games"][dataIndex]
+
+        self.info["game_id"] = self.gameId
+        self.info["season"] = self.gameDate.year
+        self.info["game_date"] = float("{}.{}".format(*str(self.gameDate).split("-")[1:]))
+        self.info["start_time"] = gameData["start_time"]
+        self.info["title"] = pageData["title"]
+        self.info["away_id"] = pageData["entityData"]["awayTeamId"].split(".")[-1]
+        self.info["home_id"] = pageData["entityData"]["homeTeamId"].split(".")[-1]
+        self.info["away_stat_line"] = gameData["away_team_stats"]
+        self.info["home_stat_line"] = gameData["home_team_stats"]
+        self.info["gameTime"] = gameData["status_display_name"]
+        self.info["awayPitcher"] = gameData.get("starting_pitchers", {}).get("away_pitcher", {}).get("player_id","None").split(".")[-1]
+        self.info["homePitcher"] = gameData.get("starting_pitchers",{}).get("home_pitcher", {}).get("player_id","None").split(".")[-1]
+        self.info["awayRoster"] = Roster(self.info["away_id"]).getInfo()
+        self.info["homeRoster"] = Roster(self.info["home_id"]).getInfo()
+
+
+    def setFilePath(self):
+        self.filePath = ENV.getPath("matchup", fileName=self.gameId, gameDate=self.gameDate)
+
+
+    def writeCondition(self):
+        return datetime.datetime.strptime(self.info["start_time"],"%a, %d %b %Y %H:%M:%S %z").date() == datetime.date.today()
 
 
 ################################################################################

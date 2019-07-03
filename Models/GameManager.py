@@ -5,7 +5,6 @@ import json
 import datetime
 from pprint import pprint
 
-from MLBProjections.MLBProjections.Models.BaseballTeam import BaseballTeam
 from MLBProjections.MLBProjections.Models.BaseballDiamond import BaseballDiamond
 from MLBProjections.MLBProjections.Models.PA import PlateAppearance
 from MLBProjections.MLBProjections.Models.Umpire import Umpire
@@ -29,8 +28,6 @@ class BaseballGame(TicketManager):
 
     def __init__(self, db):
         db.openDB()
-        self.gameId = db.curs.execute("SELECT game_id FROM games").fetchone()[0]
-
         super().__init__(db)
 
 
@@ -42,9 +39,7 @@ class BaseballGame(TicketManager):
     def initializeSport(self):
 
         self.diamond = BaseballDiamond()
-        self.homeTeam = BaseballTeam(self.db, True)
-        self.awayTeam = BaseballTeam(self.db)
-        self.umpire = Umpire(self)
+        self.umpire = Umpire(self.db)
 
 
     def runTicketMachine(self):
@@ -60,12 +55,12 @@ class BaseballGame(TicketManager):
 
             print("\n\n\n")
             print("{} Inning {}".format(self.umpire.side, self.umpire.inning))
-            print("{0[home]} Home - Away {0[away]}".format(self.umpire.scoreKeeper.scoreBook.score))
+            print("{0[home]} Home - Away {0[away]}".format(self.umpire.scoreKeeper.scoreBook.scores))
 
             self.newInning()
 
         projJson = {"games":[]}
-        projPath = ENV.getProjPath(self.gameId)
+        projPath = ENV.getProjPath(self.umpire.scoreKeeper.scoreBook.gameId)
         try:
             with open(projPath) as fileIn:
                 projJson = json.load(fileIn)

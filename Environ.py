@@ -1,11 +1,24 @@
 import os
 import json
+import datetime
 
 mainPath = os.environ["HOME"]+"{0[sep]}FEFelson{0[sep]}MLBProjections{0[sep]}"
 mainUrl = "https://sports.yahoo.com"
 scoreBoardUrl = "/mlb/scoreboard/?confId=&schedState=2&dateRange={}-{}-{}"
 playerUrl = "/mlb/players/{}/"
 rosterUrl = "/mlb/teams/{}/roster/"
+
+
+
+def getJsonInfo(filePath):
+    with open(filePath) as fileIn:
+        info = json.load(fileIn)
+    return info
+
+
+def writeJsonInfo(filePath):
+    with open(filePath, "w") as fileOut:
+        json.dump(info, fileOut)
 
 
 def getRosterUrl(teamId):
@@ -15,12 +28,17 @@ def getRosterUrl(teamId):
     return mainUrl + rosterUrl.format(slugId)
 
 
-def yearMonthDay():
+def yearMonthDay(startDate=None):
+    if not startDate:
+        startDate = datetime.date(2016,4,3)
+    endDate = datetime.date.today()
     pbpPath = getPath("boxscore").strip("None.json")
-    for year in [year for year in os.listdir(pbpPath) if os.path.isdir(pbpPath+year)]:
-        for month in [month for month in os.listdir(pbpPath+year) if os.path.isdir(pbpPath+year+"/"+month)]:
-            for day in [day for day in os.listdir(pbpPath+year+"/"+month) if os.path.isdir(pbpPath+year+"/"+month+"/"+day)]:
-                yield pbpPath+year+"/"+month+"/"+day+"/"
+
+    while endDate > startDate:
+        year,month,day = str(startDate).split("-")
+        if os.path.isdir(pbpPath+year+"/"+month+"/"+day):
+            yield pbpPath+year+"/"+month+"/"+day+"/"
+        startDate += datetime.timedelta(1)
 
 
 def getErrorPath(fileName):
@@ -53,6 +71,7 @@ def getPath(item, *, fileName=None, gameDate=None):
                     "team":"Teams",
                     "stadium":"Stadiums",
                     "boxscore":"PlayByPlay",
+                    "matchup":"PlayByPlay",
                     "roster":"Teams/Rosters",
                     "game":"Games"}.get(item, None)
 
@@ -63,6 +82,7 @@ def getPath(item, *, fileName=None, gameDate=None):
     filePath = {"scoreboard": "scoreboard.json",
                 "headshot": "{0[fileName]}.png",
                 "database": "{0[fileName]}.db",
+                "matchup": "M{0[fileName]}.json",
                 "game": "{0[fileName]}.db"}.get(item, "{0[fileName]}.json")
 
     if gameDate:

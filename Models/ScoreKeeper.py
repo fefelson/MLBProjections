@@ -9,94 +9,12 @@ from pprint import pprint
 ################################################################################
 ################################################################################
 
-
-playerPattern = re.compile("mlb.p.(?P<playerId>\d*)")
-batterPattern = re.compile("^\[(?P<playerId>\d*)\]")
-parenPattern = re.compile("\(.*?\)")
-
-outToPattern = re.compile("out to (?P<field>\w*)")
-groundOutPattern = re.compile("(?P<throw>\w*) to (?P<field>\w*)")
-
-# In order of most common
-batterPatterns = (("Ground Out", re.compile("grounded (bunt |\s?)out")),
-                  ("Strike Out", re.compile("struck out")),
-                  ("Single", re.compile("singled|reached on an infield single")),
-                  ("Fly Out", re.compile("flied out")),
-                  ("Walk", re.compile("walked")),
-                  ("Line Out", re.compile("lined out")),
-                  ("Double", re.compile("doubled|ground rule double")),
-                  ("Pop Out", re.compile("popped out")),
-                  ("Home Run", re.compile("homered|inside the park home run")),
-                  ("Fielder's Choice", re.compile("fielder's choice")),
-                  ("Double Play", re.compile("double play")),
-                  ("Fouled Out", re.compile("fouled out")),
-                  ("Hit by Pitch", re.compile("hit by pitch")),
-                  ("Reached on Error", re.compile("reached on 's (fielding|throwing) error")),
-                  ("Sacrifice", re.compile("sacrificed|sacrifice fly")),
-                  ("Triple", re.compile("tripled")),
-                  ("Reached on Interference", re.compile("reached on catcher's interference")),
-                  ("Triple Play", re.compile("triple play")),
-                  ("Out on Interference", re.compile("out on batter's interference")),
-                  ("Out of Order", re.compile("batted out of order")))
-
-
-runnerPatterns = (("Stolen Base", re.compile("stole")),
-                  ("Wild Pitch", re.compile("wild pitch")),
-                  ("Caught Stealing", re.compile("caught stealing")),
-                  ("Passed Ball", re.compile("passed ball")),
-                  ("Fielder's Indifference", re.compile("fielder's indifference")),
-                  ("Picked Off", re.compile("picked off")),
-                  ("Advanced on Error", re.compile("(fielding|throwing) error")),
-                  ("Balk", re.compile("balk")),
-                  ("Out Advancing", re.compile("out advancing on throw")))
-
-
-managerPatterns = (("Pitching Change", re.compile("pitching")),
-                   ("Fielding Change", re.compile("(catching|first|second|third|shortstop|left|right|center|designated)")),
-                   ("Pinch Hitter", re.compile("pinch hitter")),
-                   ("Pinch Runner", re.compile("pinch runner")))
-
-
-positions = {"pitcher":1, "catcher":2, "first":3, "second":4, "third":5,
-             "shortstop":6, "left":7, "center":8, "right":9}
-
-
-
-def searchAction(text, patterns):
-    # Default if no matches
-    resultLabel = "Label Error"
-    for label, pattern in patterns:
-        if pattern.search(text):
-            resultLabel = label
-            break
-    return resultLabel
-
-
-
-def runnerAction(text):
-    text = re.sub("\[.*?\]","", text)
-    return searchAction(text, runnerPatterns)
-
-
-def batterAction(text):
-
-    text = parenPattern.sub("", text)
-    text = re.sub("\[.*?\]","", text)
-    text = text.split(",")[0]
-
-    return searchAction(text, batterPatterns)
-
-
-def managerAction(text):
-    text = re.sub("\[.*?\]","", text)
-    return searchAction(text, managerPatterns)
-
-
-def cleanPlayerIds(text):
-    for playerId in playerPattern.findall(text):
-        text = playerPattern.sub(playerId, text, count=1)
-    return text
-
+gameCmd = "SELECT game_id FROM game_meta"
+teamCmd = "SELECT {0[teamAbrv]}_id FROM game_meta"
+startingPitcherCmd = "SELECT bullpen.player_id, first_name, last_name, throws FROM bullpen INNER JOIN pro_players ON bullpen.player_id = pro_players.player_id WHERE bullpen.team_id = ? AND bullpen.starter = 1"
+lineupCmd = "SELECT lineups.player_id, first_name, last_name, bats FROM lineups INNER JOIN pro_players ON lineups.player_id = pro_players.player_id WHERE lineups.team_id = ? ORDER BY batt_order"
+bullpenCmd = "SELECT bullpen.player_id, first_name, last_name, throws FROM bullpen INNER JOIN pro_players ON bullpen.player_id = pro_players.player_id WHERE bullpen.team_id = ? AND bullpen.starter = 0"
+stadiumCmd = "SELECT stadium_id FROM game_meta"
 
 ################################################################################
 ################################################################################
@@ -107,34 +25,40 @@ class ScoreKeeper:
     ScoreKeeper is a record keeper of outcomes.
     """
 
-    def __init__(self, game):
+    def __init__(self, db):
 
-        self.game = game
-        self.scoreBook = ScoreBook(game)
+        self.scoreBook = ScoreBook(db)
+
+
+    def getPitchNum(self):
+        side = self.scoreBook.fieldingSide
+        statBook = self.scoreBook.info[side]["p"].get(self.scoreBook.currentPitcher, ScoreBook.pitcherStats.copy())
+        return statBook["NUM"] + 1
+
 
 
     def pitch(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "NUM", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "NUM", pitcher)
 
 
     def pitcherOut(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "OUT", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "OUT", pitcher)
 
 
     def pitcherR(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "R", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "R", pitcher)
 
 
     def pitcherH(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "H", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "H", pitcher)
 
 
     def pitcherBB(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "BB", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "BB", pitcher)
 
 
     def pitcherK(self, pitcher=None):
-        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "K", self.scoreBook.currentPitcher)
+        self.scoreBook.addPlayerStat(self.scoreBook.fieldingSide, "p", "K", pitcher)
 
 
     def batterAB(self, batter=None):
@@ -172,15 +96,15 @@ class ScoreKeeper:
 
 
     def addRun(self):
-        self.scoreBook.score[self.scoreBook.scoringSide] += 1
+        self.scoreBook.scores[self.scoreBook.scoringSide] += 1
 
 
     def flipBook(self):
         side = "away" if self.scoreBook.scoringSide == "home" or not self.scoreBook.scoringSide else "home"
         self.scoreBook.scoringSide = side
         self.scoreBook.fieldingSide = "away" if side == "home" else "home"
-        self.scoreBook.currentPitcher = self.scoreBook.pitchers[self.scoreBook.fieldingSide]
-        self.scoreBook.battingLineup = self.scoreBook.lineups[side]
+        self.scoreBook.currentPitcher = self.scoreBook.activePitchers[self.scoreBook.fieldingSide]
+        self.scoreBook.currentLineup = self.scoreBook.battingLineups[side]
 
 
     def getPitcher(self):
@@ -188,11 +112,23 @@ class ScoreKeeper:
 
 
     def newPitcher(self, pitcher):
-        self.scoreBook.pitchers[self.scoreBook.fieldingSide] = pitcher
+
+        self.scoreBook.activePitchers[self.scoreBook.fieldingSide] = pitcher
+        bullpen = self.scoreBook.bullpens[self.scoreBook.fieldingSide]
+        for i,player in enumerate(bullpen):
+            if player == pitcher:
+                bullpen.pop(i)
+                break
+        self.scoreBook.bullpens[self.scoreBook.fieldingSide] = bullpen
+        self.setPitcher(pitcher)
 
 
     def setPitcher(self, pitcher):
         self.scoreBook.currentPitcher = pitcher
+
+
+    def getTurn(self, batter, pitcher):
+        return self.scoreBook.getTurn(batter, pitcher)
 
 
     def setLineup(self, lineup):
@@ -217,33 +153,65 @@ class ScoreKeeper:
 
 class ScoreBook:
 
-    pitcherStats = {"OUT":0,"NUM":0,"BB":0,"H":0,"R":0,"K":0 }
+    pitcherStats = {"OUT":0,"NUM":0,"HBP":0,"BB":0,"H":0,"R":0,"K":0 }
     batterStats = {"AB":0,"BB":0,"H":0,"2B":0,"3B":0,"HR":0,"R":0,"RBI":0}
 
     bookTemplate = {"b":{},"p":{}}
 
-    def __init__(self, game):
+    def __init__(self, db):
 
         self.info = {"home": copy.deepcopy(ScoreBook.bookTemplate), "away": copy.deepcopy(ScoreBook.bookTemplate)}
 
+        self.gameId = db.curs.execute(gameCmd).fetchone()[0]
+        self.stadiumId = db.curs.execute(stadiumCmd).fetchone()[0]
+        self.teams = {}
+        self.scores = {}
         self.scoringSide = None
         self.fieldingSide = None
         self.currentPitcher = None
-        self.battingLineup = None
+        self.currentLineup = None
+        self.activePitchers = {}
+        self.battingLineups = {}
+        self.battingOrders = {}
+        self.bullpens = {}
+        self.benches = {}
+        self.turn = {}
 
-        self.score = {"home":0, "away": 0}
 
-        self.pitchers = {"home":game.homeTeam.currentPitcher, "away":game.awayTeam.currentPitcher}
-        self.lineups = {"home":game.homeTeam.lineup, "away":game.awayTeam.lineup}
-        self.battingOrder = {"home":-1, "away":-1}
+        for teamAbrv in ("home", "away"):
+            # teamId
+            teamId = db.curs.execute(teamCmd.format({"teamAbrv":teamAbrv})).fetchone()[0]
+            self.teams[teamAbrv] = teamId
+            # playerId, firstName, lastName, throws
+            self.activePitchers[teamAbrv] = db.curs.execute(startingPitcherCmd, (teamId, )).fetchone()
+            # playerId, firstName, lastName, bats
+            self.battingLineups[teamAbrv] = [x for x in db.curs.execute(lineupCmd, (teamId,)).fetchall()]
+            # playerId, firstName, lastName, throws
+            self.bullpens[teamAbrv] = [x for x in db.curs.execute(bullpenCmd, (teamId,)).fetchall()]
+            # initialize battingOrder
+            self.battingOrders[teamAbrv] = -1
+            # initialize score
+            self.scores[teamAbrv] = 0
+
 
 
     def setScoringSide(self, side):
         self.scoringSide = side
 
 
+    def getTurn(self, batter, pitcher):
+        allTurns = self.turn.get(pitcher, {})
+        turn = allTurns.get(batter, 0) +1
+        allTurns[batter] = turn
+        self.turn[pitcher] = allTurns
+        return turn
+
+
+
 
     def addPlayerStat(self, side, role, stat, playerId):
+        # Dirty hack
+        playerId = int(playerId[0])
 
         statGroup = ScoreBook.pitcherStats if role == "p" else ScoreBook.batterStats
         statBook = self.info[side][role].get(playerId, statGroup.copy())
@@ -253,11 +221,12 @@ class ScoreBook:
 
     def getBatter(self):
 
-        num = self.battingOrder[self.scoringSide] + 1
+        num = self.battingOrders[self.scoringSide] + 1
         index = num % 9
 
-        batterId = self.battingLineup[index]
-        self.battingOrder[self.scoringSide] = num
+
+        batterId = self.currentLineup[index]
+        self.battingOrders[self.scoringSide] = num
         return batterId
 
 

@@ -1,6 +1,9 @@
 import random
 import sqlite3
+import numpy
 from pprint import pprint
+from sklearn.linear_model import LogisticRegression as LogReg
+from sklearn.linear_model import LinearRegression as LinReg
 
 from MLBProjections.MLBProjections.Models.Umpire import Umpire
 import MLBProjections.MLBProjections.DB.MLB as DB
@@ -32,43 +35,35 @@ def formCmd(attempt, cmdValues):
 
 # TODO: select multiple Items in selectCmdFormat
 
-pitchTypesCmd = {"selectCmdFormat": {"item": "pitch_type_id", "tableName": "pitches"},
-                    "innerCmdFormat": ({"joinTable": "pro_players", "joinNum": 1, "joinRelation": "main_table.batter_id = join_table_1.player_id"},),
-                    "whereConditions": ("pitch_type_id != 7", "pitcher_id=?", "bats=?", "balls=?", "strikes=?")
+pitcherResultCmd = {"selectCmdFormat": {"item": "pitch_type_id, velocity, box, pitch_result_id", "tableName": "pitch_contacts"},
+                    "innerCmdFormat": [],
+                    "whereConditions": ("pitch_type_id != 7", "pitcher_id=?", "side=?", "balls=?", "strikes=?", "turn=?", "sequence=?")
                 }
 
 
-pitchVelocityCmd = {"selectCmdFormat": {"item": "velocity", "tableName": "pitches"},
-                    "whereConditions": ("pitcher_id=?", "pitch_type_id=?", "balls=?", "strikes=?")
+batterResultCmd = {"selectCmdFormat": {"item": "pitch_result_id", "tableName": "pitch_contacts"},
+                    "innerCmdFormat": [],
+                    "whereConditions": ("batter_id=?", "side=?",  "box=?", "pitch_type_id=?","velocity>= ?", "velocity <= ?", "balls=?", "strikes=?", "turn=?", "sequence=?")
                 }
 
 
-pitchLocationCmd = {"selectCmdFormat": {"item": "box", "tableName": "pitch_locations"},
-                    "innerCmdFormat": ({"joinTable": "pitches", "joinNum": 1, "joinRelation": "main_table.location_id = join_table_1.location_id"},
-                                        {"joinTable": "pro_players", "joinNum": 2, "joinRelation": "join_table_1.batter_id = join_table_2.player_id"}),
-                    "whereConditions": ("pitcher_id=?", "bats=?", "pitch_type_id=?", "balls=?", "strikes=?")
+hitResultCmd = {"selectCmdFormat": {"item": "hit_style, hit_hardness, hit_angle, hit_distance", "tableName": "pitch_contacts"},
+                    "innerCmdFormat": [],
+                    "whereConditions": ("pitch_result_id=10", "batter_id=?", "side=?", "box=?", "pitch_type_id=?", "velocity>= ?", "velocity <= ?")
                 }
 
 
-batterResultCmd = {"selectCmdFormat": {"item": "pitch_id, pitch_result_id", "tableName": "pitches"},
-                    "innerCmdFormat": ({"joinTable": "pitch_locations", "joinNum": 1, "joinRelation": "main_table.location_id = join_table_1.location_id"},
-                                        {"joinTable": "pro_players", "joinNum": 2, "joinRelation": "main_table.pitcher_id = join_table_2.player_id"}),
-                    "whereConditions": ("batter_id=?", "pitch_type_id=?", "throws=?", "box=?", "(velocity BETWEEN ? AND ?)",)
-                }
+inPlayResultCmd = {"selectCmdFormat": {"item": "title", "tableName": "result_types"},
+                "innerCmdFormat": ({"joinTable": "contacts_at_bats", "joinNum": 1, "joinRelation": "main_table.result_type_id = join_table_1.ab_type_id"},),
+                "whereConditions": ("hit_style=?", "hit_hardness=?", "hit_angle=?", "hit_distance=?")
+            }
 
 
-hitResultCmd = {"selectCmdFormat": {"item": "title", "tableName": "result_types"},
-                    "innerCmdFormat": ({"joinTable": "ab_results", "joinNum": 1, "joinRelation": "main_table.result_type_id = join_table_1.result_type_id"},
-                                        {"joinTable": "contacts", "joinNum": 2, "joinRelation": "join_table_1.contact_id = join_table_2.contact_id"}),
-                    "whereConditions": ("stadium_id=?", "hit_style=?", "hit_hardness=?", "hit_angle=?", )
-                }
 
 
-pitcherResultCmd = {"selectCmdFormat": {"item": "pitch_result_id", "tableName": "pitches"},
-                    "innerCmdFormat": ({"joinTable": "pitch_locations", "joinNum": 1, "joinRelation": "main_table.location_id = join_table_1.location_id"},
-                                        {"joinTable": "pro_players", "joinNum": 2, "joinRelation": "main_table.batter_id = join_table_2.player_id"}),
-                    "whereConditions": ("pitcher_id=?", "pitch_type_id=?", "bats=?", "box=?", "(velocity BETWEEN ? AND ?)", "strikes=?", "balls=?")
-                }
+
+
+
 
 
 ################################################################################
@@ -80,26 +75,19 @@ class PlateAppearance:
     def __init__(self, pitcher, batter, umpire):
 
 
-
+        # playerId, firstName, lastName, throws
         self.pitcher = pitcher
-        try:
-            *pName, throws = umpire.db.curs.execute("SELECT first_name, last_name, throws FROM pro_players WHERE player_id = ?", (pitcher,)).fetchone()
-        except TypeError:
-            pName = "First","Last"
-            throws = "R"
-        self.throws = throws
-        #self.catcherId = catcherId
-        #self.fielders = fielders
+        # playerId, firstName, lastName, bats
         self.batter = batter
-        *bName, bats = umpire.db.curs.execute("SELECT first_name, last_name, bats FROM pro_players WHERE player_id = ?", (batter,)).fetchone()
-        self.bats = bats
-        #self.baseRunners = baseRunners
         self.umpire = umpire
 
+
         print()
-        print(pName)
-        print(bName)
+        print("Pitching:  {} {}   throws: {}".format(*pitcher[1:]))
+        print("Batting:  {} {}   bats: {}".format(*batter[1:]))
         print()
+
+        self.batSide = int(batter[-1] == pitcher[-1])
 
         self.result = self.runPA()
         print(self.result)
@@ -108,133 +96,111 @@ class PlateAppearance:
     def getResult(self, cmd, args):
         #pprint(cmd)
         answer = None
-        results = self.umpire.db.curs.execute(cmd, args).fetchall()
+        results = self.umpire.db.fetchAll(cmd, args)
 
-        index = round(random.random() * (len(results)-1))
 
-        try:
-            answer = results[index]
-        except IndexError:
-            raise
-            # print()
-            # pprint(cmd)
-            # print(args)
-            # print()
-            # raise
-        #print(results)
-        #print("\n\nLength {}   Index {}".format(len(results), index))
+        answer = random.choice(results)
         return answer
 
 
-    def getPitchType(self, balls, strikes, attempt=0):
-        args = [self.pitcher, self.bats, balls, strikes]
+    def getPitch(self, turn, sequence, side, balls, strikes, attempt=0):
+        args = [self.pitcher[0], self.batSide, int(balls), int(strikes), int(turn), int(sequence)]
         args = args if not attempt else args[:attempt]
-        cmd = formCmd(attempt, pitchTypesCmd)
+        cmd = formCmd(attempt, pitcherResultCmd)
         try:
-            result = self.getResult(cmd, args)[0]
+            result = self.getResult(cmd, args)
         except IndexError:
-            if attempt > -3:
-                result = self.getPitchType(balls, strikes, attempt-1)
-            else:
-                result = 1
-        except sqlite3.ProgrammingError:
-            self.umpire.db.openDB()
-            result = 1
+            result = self.getPitch(turn, sequence, side, balls, strikes, attempt-1)
 
         return result
 
 
-    def getPitchVelocity(self, pitchType, balls, strikes, attempt=0):
-        args = [self.pitcher, pitchType, balls, strikes]
-        args = args if not attempt else args[:attempt]
-        cmd = formCmd(attempt, pitchVelocityCmd)
-        try:
-            result = self.getResult(cmd, args)[0]
-        except IndexError:
-            if attempt > -3:
-                result = self.getPitchVelocity(pitchType, balls, strikes, attempt-1)
-            else:
-                result = 90
-        except sqlite3.ProgrammingError:
-            self.umpire.db.openDB()
-            result = 90
-        return result
-
-
-    def getPitchLocation(self, pitchType, balls, strikes, attempt=0):
-        args = [self.pitcher, self.bats, pitchType, balls, strikes]
-        args = args if not attempt else args[:attempt]
-        cmd = formCmd(attempt, pitchLocationCmd)
-        try:
-            result = self.getResult(cmd, args)[0]
-        except IndexError:
-            if attempt > -3:
-                result = self.getPitchLocation(pitchType, balls, strikes, attempt-1)
-            else:
-                result = 13
-        except sqlite3.ProgrammingError:
-            self.umpire.db.openDB()
-            result = 13
-        return result
-
-
-    def getBatterResult(self, pitchType, pitchLocation, pitchVelocity, attempt=0):
+    def getBatResult(self, pitchType, box, pitchVelocity, side, balls, strikes, turn, sequence, attempt=0):
         pitchTuple = (pitchVelocity-2, pitchVelocity+2)
+        args = [self.batter[0], side, int(box), int(pitchType), *pitchTuple, int(balls), int(strikes), int(turn), int(sequence)]
+        args = args if not attempt else args[:attempt]
+        result = None
 
-        if attempt > -1:
-            args = [self.batter, pitchType, self.throws, pitchLocation, *pitchTuple,]
+        if attempt != -5:
             cmd = formCmd(attempt, batterResultCmd)
-        elif attempt == -1:
-            args = [self.batter, pitchType, self.throws, pitchLocation,]
-            cmd = formCmd(attempt, batterResultCmd)
-        elif attempt == -2:
-            cmd = "SELECT pitch_id, pitch_result_id FROM pitches AS main_table INNER JOIN pro_players AS join_table_2 ON main_table.pitcher_id = join_table_2.player_id WHERE batter_id=? AND pitch_type_id=? AND throws=?"
-            args = [self.batter, pitchType, self.throws]
 
-        elif attempt <= -3:
-            cmd = "SELECT pitch_id, pitch_result_id FROM pitches AS main_table WHERE batter_id=? AND pitch_type_id=?"
-            args = [self.batter, pitchType]
+        try:
+            result = self.getResult(cmd, args)[0]
 
+
+        except IndexError:
+            result = self.getBatResult(pitchType, box, pitchVelocity, side, balls, strikes, turn, sequence, attempt-1)
+
+
+        except UnboundLocalError:
+            pass
+        except (ValueError, sqlite3.OperationalError):
+            result = self.umpire.db.fetchOne("SELECT (CASE WHEN strike_zone = 'True' THEN 1 ELSE 0 END) FROM pitch_locations WHERE box = ?",(box,))[0]
+        if result == None:
+            result = self.getBatResult(pitchType, box, pitchVelocity, side, balls, strikes, turn, sequence, attempt-1)
+        return result
+
+
+    def getContact(self, pitchType, box, pitchVelocity, side, attempt=0):
+        pitchTuple = (int(pitchVelocity)-2, int(pitchVelocity)+2)
+        args = [int(self.batter[0]), side, int(box), int(pitchType),*pitchTuple]
+        args = args if not attempt else args[:attempt]
+        result = [None,]
+
+        if attempt != -1:
+            cmd = formCmd(attempt, hitResultCmd)
 
         try:
             result = self.getResult(cmd, args)
         except IndexError:
-            if attempt > -4:
-                result = self.getBatterResult(pitchType, pitchLocation, pitchVelocity, attempt-1)
-            else:
-                strikeZone = self.umpire.db.curs.execute("SELECT strike_zone FROM pitch_locations WHERE box = ?",(pitchLocation, )).fetchone()[0]
-                result = (-1, 2) if strikeZone == "True" else (-1,0)
-            # pprint(cmd)
-            # print(args)
-            # print("\n\n")
+            result = self.getContact(pitchType, box, pitchVelocity, side, attempt-1)
         except sqlite3.ProgrammingError:
-            self.umpire.db.openDB()
-            strikeZone = self.umpire.db.curs.execute("SELECT strike_zone FROM pitch_locations WHERE box = ?",(pitchLocation, )).fetchone()[0]
-            result = (-1, 2) if strikeZone == "True" else (-1,0)
+            pass
+        except UnboundLocalError:
+            pass
+        except sqlite3.OperationalError:
+            result = (1,1,1,1)
+
+
+        if result[0] == None:
+            result = self.getContact(pitchType, box, pitchVelocity, side, attempt-1)
+
 
         return result
 
 
-    def getHitResult(self, hitStyle, hitHard, hitAngle, attempt=0):
-        args = [self.umpire.stadiumId,  hitStyle, hitHard, hitAngle,]
+    def getInPlayResult(self, hitStyle, hitHard, hitAngle, hitDistance, attempt=0):
+        args = [hitStyle, hitHard, hitAngle, hitDistance]
         args = args if not attempt else args[:attempt]
-        cmd = formCmd(attempt, hitResultCmd)
+        result = [None,]
+        cmd = formCmd(attempt, inPlayResultCmd)
         try:
             result = self.getResult(cmd, args)[0]
+
         except IndexError:
-            result = self.getHitResult(hitStyle, hitHard, hitAngle, attempt-1)
-        except sqlite3.ProgrammingError:
-            self.umpire.db.openDB()
-            result = "Fielder's Choice"
+            result = self.getInPlayResult(hitStyle, hitHard, hitAngle, hitDistance, attempt-1)
+        if not result[0]:
+            result = self.getInPlayResult(hitStyle, hitHard, hitAngle, hitDistance, attempt-1)
+
         return result
+
+
 
 
     def runPA(self):
         self.umpire.resetCount()
 
-        pitchCount = 0
+        sequence = 1
+        turn = self.umpire.scoreKeeper.getTurn(self.batter, self.pitcher)
+        self.prevPitch1 = 0
+        self.prevPitch2 = 0
+        self.prevBox1 = -1
+        self.prevBox2 = -1
 
         while True:
+
+            pitchNum = self.umpire.scoreKeeper.getPitchNum()
+
 
             hitResult = None
             tag = "Out"
@@ -242,10 +208,9 @@ class PlateAppearance:
             balls, strikes = self.umpire.getCount()
 
             # print("COUNT: Balls {}  Strikes {}".format(balls,strikes))
-            pitchType = self.getPitchType(balls, strikes)
-            pitchLabel = self.umpire.db.curs.execute("SELECT title FROM pitch_types WHERE pitch_type_id = ?",(pitchType,)).fetchone()[0]
-            pitchVelocity = self.getPitchVelocity(pitchType, balls, strikes)
-            pitchLocation = self.getPitchLocation(pitchType, balls, strikes)
+            pitch = self.getPitch(turn, sequence, self.batSide, balls, strikes)
+            pitchType, pitchVelocity, pitchLocation, pitcherResult = pitch
+            pitchLabel = self.umpire.db.fetchOne("SELECT title FROM pitch_types WHERE pitch_type_id = ?", (pitchType,))[0]
             # print("\n{}  {}\n".format(pitchLabel, pitchVelocity))
             # for y in range(5):
             #     row = [(y*5)+x for x in range(1,6)]
@@ -257,36 +222,38 @@ class PlateAppearance:
             #             rowFormat.append("{:2d}".format(i))
             #     print(rowFormat)
 
+            batterResult = self.getBatResult(pitchType, pitchLocation, pitchVelocity, self.batSide, balls, strikes, turn, sequence)
 
-            try:
-                batterResult = self.getBatterResult(pitchType, pitchLocation, pitchVelocity)
-                resultLabel = self.umpire.db.curs.execute("SELECT title FROM pitch_results WHERE pitch_result_id = ?",(batterResult[-1],)).fetchone()[0]
-            except TypeError:
-                resultLabel = "Ball"
-            # print("\n{}\n".format(resultLabel))
-            # input(batterResult)
+            result = random.choice([pitcherResult, batterResult])
+
+
+
+            #print("\n{}\n".format(resultLabel))
             self.umpire.scoreKeeper.pitch(self.pitcher)
-            try:
-                if batterResult[-1] == 10:
-                    pitchId = batterResult[0]
+            if result == 10:
 
-                    hitHard, hitAngle, hitStyle = self.umpire.db.curs.execute("SELECT hit_hardness, hit_angle, hit_style FROM contacts WHERE contacts.pitch_id = ?",(pitchId, )).fetchone()
-                    hitResult = self.getHitResult(hitStyle, hitHard, hitAngle)
-                #runner = Runner(self.umpire.getScoreKeeper(), self.pitchId, self.catcherId, self.baseRunners)
-                outcome, tag = self.umpire.pitchRuling(batterResult[-1], hitResult)
-            except TypeError:
-                outcome = "Out"
-                tag = "Out"
+                contact = self.getContact(pitchType, pitchLocation, pitchVelocity, self.batSide)
+
+                hitResult = self.getInPlayResult(*contact)
+            #runner = Runner(self.umpire.getScoreKeeper(), self.pitchId, self.catcherId, self.baseRunners)
+            outcome, tag = self.umpire.pitchRuling(result, hitResult)
+
+
+
+            self.prevPitch2 = self.prevPitch1 = 0
+            self.prevBox1 = -1
+            self.prevBox2 = -1
 
 
             #     outcome = "Out"
-            pitchCount += 1
-            if pitchCount > 20:
+            sequence += 1
+            if sequence > 20:
                 outcome = "Out"
                 tag = "Out"
             # #input("\n\n")
             if outcome:
                 return tag
+
 
 
 
