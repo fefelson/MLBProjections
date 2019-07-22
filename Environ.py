@@ -23,7 +23,7 @@ def writeJsonInfo(filePath):
 
 def getRosterUrl(teamId):
     slugId = None
-    with open(mainPath.format({"sep":os.sep})+"/Teams/{}.json".format(teamId)) as fileIn:
+    with open(mainPath.format({"sep":os.sep})+"Teams/{}.json".format(teamId)) as fileIn:
         slugId = json.load(fileIn)["slugId"]
     return mainUrl + rosterUrl.format(slugId)
 
@@ -69,6 +69,8 @@ def getPath(item, *, fileName=None, gameDate=None):
                     "headshot":"Players{0[sep]}Headshots",
                     "player":"Players",
                     "team":"Teams",
+                    "logo":"Teams/Logos",
+                    "g-logo":"Teams/Logos",
                     "stadium":"Stadiums",
                     "boxscore":"PlayByPlay",
                     "matchup":"PlayByPlay",
@@ -83,6 +85,8 @@ def getPath(item, *, fileName=None, gameDate=None):
                 "headshot": "{0[fileName]}.png",
                 "database": "{0[fileName]}.db",
                 "matchup": "M{0[fileName]}.json",
+                "logo": "{0[fileName]}.png",
+                "g-logo": "G{0[fileName]}.png",
                 "game": "{0[fileName]}.db"}.get(item, "{0[fileName]}.json")
 
     if gameDate:
@@ -95,23 +99,5 @@ def getPath(item, *, fileName=None, gameDate=None):
     return newPath
 
 
-def getMatchupPath(gameDate):
-    gd = str(gameDate).split("-")
-    return mainPath.format({"sep": os.sep})+"/MLBProjections/Matchups/{}.json".format("".join(gd))
-
-
-def getLineupPath(gameDate):
-    gd = str(gameDate).split("-")
-    return mainPath.format({"sep": os.sep})+"Lineups/{}.json".format("".join(gd))
-
-
-
 def getProjPath(gameId):
     return mainPath.format({"sep": os.sep})+"Projections/{}.json".format(gameId)
-
-
-def getGamePaths():
-    gamePaths = []
-    for gamePath in os.listdir(filePath):
-        gamePaths.append(filePath+gamePath)
-    return gamePaths

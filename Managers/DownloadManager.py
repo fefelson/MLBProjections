@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import urllib.error as error
+import copy
 
 from abc import ABCMeta, abstractmethod
 from bs4 import BeautifulSoup
@@ -49,7 +50,8 @@ def downloadItem(url, attempts = 5, sleepTime = 3):
         if hasattr(e,'reason'):
             print (e.reason)
             msg+=" "+str(e.reason)
-        writeErrorMsg("downloads", url, msg)
+        # writeErrorMsg("downloads", url, msg)
+        raise
     return item
 
 
@@ -82,12 +84,13 @@ class DownloadManager(UpdateMixIn):
 
 
     def update(self):
+        self.loadManagerFile()
         today = datetime.date.today()
         if self.checkUpdate():
             checkDate = self.getItem().date()
-        self.getGameDates(checkDate, today)
-        self.getMatchups(today)
-        self.updateManagerFile()
+            self.getGameDates(checkDate, today)
+            self.updateManagerFile()
+
 
 
     def getGameDates(self, startDate, endDate):
@@ -97,15 +100,14 @@ class DownloadManager(UpdateMixIn):
             startDate += datetime.timedelta(1)
 
 
-    def getMatchups(self, today):
-        for data in ScoreBoard(today, "pregame").getGameUrls():
-            Matchup(today, data)
+    def getMatchups(self, gameDate, force=False):
+        for url in ScoreBoard(gameDate, "pregame").getGameUrls():
+            Matchup(gameDate, url, force)
 
 
-
-    def getPlayer(self, playerId):
-        player = Player(playerId)
-        player.downloadHeadshot()
+    def getFiles(self, key, fileName, force=False):
+        itemType = {"player":Player, "roster":Roster}[key]
+        itemType(fileName, force)
 
 
 ################################################################################
@@ -133,8 +135,8 @@ class RecordableItem(metaclass=ABCMeta):
         self.setFilePath()
         if self.downloadCondition():
             self.parseData()
-        if self.writeCondition():
-            self.saveToFile()
+            if self.writeCondition():
+                self.saveToFile()
 
 
     @abstractmethod
@@ -321,8 +323,6 @@ class BoxScore(RecordableItem):
         self.filePath = ENV.getPath("boxscore", fileName=self.gameId, gameDate=self.gameDate)
 
 
-
-
     def writeCondition(self):
         return self.info != {}
 
@@ -333,12 +333,13 @@ class BoxScore(RecordableItem):
 
 class Player(RecordableItem):
 
-    _fields = ["playerId", "url"]
+    _fields = ["playerId", "url", "force"]
 
     newPlayer = {"player_id":-1,
                 "first_name":"N/A",
                 "last_name":"N/A",
                 "pos":-1,
+                "image":None,
                 "height": -1,
                 "weight": -1,
                 "bats":None,
@@ -347,20 +348,23 @@ class Player(RecordableItem):
                 "birth_year":-1,
                 "birth_day":0.0}
 
-    def __init__(self, playerId):
-        super().__init__(playerId, ENV.getPlayerUrl(playerId))
+    def __init__(self, playerId, force=None):
+        super().__init__(playerId, ENV.getPlayerUrl(playerId), force)
 
 
     def downloadCondition(self):
-        return super().downloadCondition()
+        if self.force:
+            return True
+        else:
+            return super().downloadCondition()
 
 
     def downloadHeadshot(self):
         imagePath = self.info["image"]
         headShotPath = ENV.getPath("headshot", fileName=self.playerId)
+        print(imagePath)
         if not os.path.exists(headShotPath):
-           req = Request(imagePath, headers=headers)
-           html = urlopen(req)
+           html = urlopen(imagePath)
            with open(headShotPath, "wb") as fileOut:
                fileOut.write(html.read())
 
@@ -368,12 +372,12 @@ class Player(RecordableItem):
 
     def parseData(self):
         data = downloadItem(self.url)["context"]["dispatcher"]["stores"]["PlayersStore"]["players"]["mlb.p.{}".format(self.playerId)]
-
         self.info = Player.newPlayer.copy()
         self.info["player_id"] = self.playerId
         self.info["first_name"] = data["first_name"]
         self.info["last_name"] = data["last_name"]
         self.info["pos"] = data["primary_position_id"].split(".")[-1]
+        self.info["image"] = data["image"]
         self.info["height"] = data["bio"]["height"]
         self.info["weight"] = data["bio"]["weight"]
         self.info["bats"] = data["bat"]
@@ -399,11 +403,21 @@ class Player(RecordableItem):
 
 class Roster(RecordableItem):
 
-    _fields = ["teamId", "url"]
+    _fields = ["teamId", "url", "force"]
 
+    newPlayer = {"playerId": -1,
+                    "firstName": None,
+                    "lastName": None,
+                    "depthChart": [],
+                    "positions": [],
+                    "primaryPosition": -1,
+                    "image": None,
+                    }
 
-    def __init__(self, teamId):
-        super().__init__(teamId, ENV.getRosterUrl(teamId))
+    newDepth = {'depth': None, 'positionId': -1}
+
+    def __init__(self, teamId, force=False):
+        super().__init__(teamId, ENV.getRosterUrl(teamId), force)
 
 
     def downloadCondition(self):
@@ -414,19 +428,35 @@ class Roster(RecordableItem):
         data = downloadItem(self.url)["context"]["dispatcher"]["stores"]["PlayersStore"]
         self.info["pitchers"] = []
         self.info["batters"] = []
-        for player in [player for player in data["players"].values() if player["team_id"] == "mlb.t.{}".format(self.teamId) and not player.get("injury", None)]:
+        for player in [player for player in data["players"].values() if player["team_id"] == "mlb.t.{}".format(self.teamId)]:
+
+            newPlayer = copy.deepcopy(self.newPlayer)
+            newPlayer["playerId"] = player["player_id"].split(".")[-1]
+            newPlayer["firstName"] = player["first_name"]
+            newPlayer["lastName"] = player["last_name"]
+            newPlayer["image"] = player["image"]
+            newPlayer["primaryPosition"] = player["primary_position_id"].split(".")[-1]
+            for depth in player["depth_chart_positions"].values():
+                newDepth = copy.deepcopy(self.newDepth)
+                newDepth["depth"] = depth["depth"]
+                newDepth["positionId"] = depth["position_id"].split(".")[-1]
+                newPlayer["depthChart"].append(newDepth)
+            for position in player["positions"].values():
+                newPlayer["positions"].append(position.split(".")[-1])
+
             if player["primary_position_id"] in ("mlb.pos.21", "mlb.pos.22"):
-                self.info["pitchers"].append(player["player_id"].split(".")[-1])
+
+                self.info["pitchers"].append(newPlayer)
             else:
-                self.info["batters"].append(player["player_id"].split(".")[-1])
+                self.info["batters"].append(newPlayer)
 
 
     def setFilePath(self):
-        pass
+        self.filePath = ENV.getPath("roster", fileName=self.teamId)
 
 
     def writeCondition(self):
-        return False
+        return True
 
 
 ################################################################################
@@ -435,21 +465,26 @@ class Roster(RecordableItem):
 
 class Matchup(RecordableItem):
 
-    _fields = ["gameDate", "gameId", "url"]
+    _fields = ["gameDate", "gameId", "url", "force"]
 
-    newLineup = {"player_type":"N/A",
-                    "order": -1,
-                    "player_id":-1,
-                    "position": [],
-                    "sub_order":-1}
+    newTeam = {"teamId": -1,
+                "starter": -1,
+                "statLine": None,
+                "roster": None,
+                "lineup": None
+                }
 
-    def __init__(self, gameDate, url):
+
+    def __init__(self, gameDate, url, force=False):
         gameId = url.split("-")[-1].strip("/")
-        super().__init__(gameDate, gameId, ENV.mainUrl + url)
+        super().__init__(gameDate, gameId, ENV.mainUrl + url, force)
 
 
     def downloadCondition(self):
-        return super().downloadCondition()
+        if self.force:
+            return True
+        else:
+            return super().downloadCondition()
 
 
     def parseData(self):
@@ -458,21 +493,22 @@ class Matchup(RecordableItem):
         # used as key in GamesStore
         dataIndex = pageData["entityId"]
         gameData = data["context"]["dispatcher"]["stores"]["GamesStore"]["games"][dataIndex]
-
-        self.info["game_id"] = self.gameId
+        self.info["gameId"] = self.gameId
         self.info["season"] = self.gameDate.year
-        self.info["game_date"] = float("{}.{}".format(*str(self.gameDate).split("-")[1:]))
-        self.info["start_time"] = gameData["start_time"]
+        self.info["gameDate"] = float("{}.{}".format(*str(self.gameDate).split("-")[1:]))
+        self.info["startTime"] = gameData["start_time"]
         self.info["title"] = pageData["title"]
-        self.info["away_id"] = pageData["entityData"]["awayTeamId"].split(".")[-1]
-        self.info["home_id"] = pageData["entityData"]["homeTeamId"].split(".")[-1]
-        self.info["away_stat_line"] = gameData["away_team_stats"]
-        self.info["home_stat_line"] = gameData["home_team_stats"]
         self.info["gameTime"] = gameData["status_display_name"]
-        self.info["awayPitcher"] = gameData.get("starting_pitchers", {}).get("away_pitcher", {}).get("player_id","None").split(".")[-1]
-        self.info["homePitcher"] = gameData.get("starting_pitchers",{}).get("home_pitcher", {}).get("player_id","None").split(".")[-1]
-        self.info["awayRoster"] = Roster(self.info["away_id"]).getInfo()
-        self.info["homeRoster"] = Roster(self.info["home_id"]).getInfo()
+
+        for team in ("home", "away"):
+            self.info[team] = copy.deepcopy(self.newTeam)
+            self.info[team]["teamId"] = pageData["entityData"]["{}TeamId".format(team)].split(".")[-1]
+            self.info[team]["statLine"] = gameData["{}_team_stats".format(team)]
+            try:
+                self.info[team]["starter"] = gameData["byline"]["playersByType"]["{}_pitcher".format(team)].split(".")[-1]
+            except KeyError:
+                pass
+
 
 
     def setFilePath(self):
@@ -480,7 +516,13 @@ class Matchup(RecordableItem):
 
 
     def writeCondition(self):
-        return datetime.datetime.strptime(self.info["start_time"],"%a, %d %b %Y %H:%M:%S %z").date() == datetime.date.today()
+        # A string date format with utc time
+        gameDate = datetime.datetime.strptime(self.info["startTime"],"%a, %d %b %Y %H:%M:%S %z")
+        # Converting from utc to est
+        gameDate = gameDate - datetime.timedelta(hours=4)
+        # Write matchup if game is today
+        return gameDate.date() == self.gameDate
+
 
 
 ################################################################################

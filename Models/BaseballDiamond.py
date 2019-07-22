@@ -3,7 +3,7 @@
 ################################################################################
 
 
-
+emptyBase = (-10,-20)
 
 
 ################################################################################
@@ -22,24 +22,28 @@ class BaseballDiamond:
 
     def __init__(self):
 
-        self.firstBase = (-10, -20)
-        self.secondBase = (-10, -20)
-        self.thirdBase = (-10, -20)
+        self.firstBase = emptyBase
+        self.secondBase = emptyBase
+        self.thirdBase = emptyBase
 
         self.onBase = {}
 
 
     def clearBases(self):
-        self.firstBase = (-10, -20)
-        self.secondBase = (-10, -20)
-        self.thirdBase = (-10, -20)
-
+        self.firstBase = emptyBase
+        self.secondBase = emptyBase
+        self.thirdBase = emptyBase
         self.onBase.clear()
+
+
+    def moveBase(self, base1, base2):
+        values = self.popBase(base1)
+        self.reachedBase(base2, *values)
 
 
     def reachedBase(self, base, playerId, onHook=-20):
         value = getattr(self, base)
-        if value[0] != -10:
+        if value != emptyBase:
             # print(self.firstBase, self.secondBase, self.thirdBase)
             # print()
             raise BaseFullError("Already a player on this base")
@@ -50,7 +54,7 @@ class BaseballDiamond:
 
     def popPlayer(self, playerId):
         player = self.onBase[playerId]
-        setattr(self, player["base"], (-10, -20))
+        setattr(self, player["base"], emptyBase)
         return player["onHook"]
 
 
@@ -60,7 +64,7 @@ class BaseballDiamond:
 
     def popBase(self, base):
         value = getattr(self, base)
-        setattr(self, base, (-10, -20))
+        setattr(self, base, emptyBase)
         return value
 
 
@@ -72,14 +76,8 @@ class BaseballDiamond:
         return getattr(self, base)
 
 
-    def getBasesLoaded(self):
-        pass
-        # return True if self.firstBase and self.secondBase and self.thirdBase else False
-
-
-    def getBasesEmpty(self):
-        pass
-        # return True if not self.firstBase and not self.secondBase and not self.thirdBase else False
+    def getDiamondState(self):
+        return "_".join([base for base in ("firstBase", "secondBase", "thirdBase") if getattr(self, base) != emptyBase])
 
 
     def setBase(self, base, playerId):
@@ -100,14 +98,3 @@ class BaseballDiamond:
         #     self.secondBase = None
         # else:
         #     self.thirdBase = None
-
-
-
-    def moveBase(self, base1, base2=None):
-        pass
-        # startBase = {"first":self.firstBase, "second":self.secondBase, "third":self.thirdBase}[base1]
-        # playerId = startBase
-        # self.clearBase(base1)
-        #
-        # if base2:
-        #     self.setBase(base2, playerId)

@@ -17,13 +17,13 @@ class TicketManager(metaclass=ABCMeta):
     def __init__(self, db):
 
         self.db = db
+        self.db.openDB()
         self.homeTeam = None
         self.awayTeam = None
 
-        self.initializeSport()
-        self.setTicketTypes()
 
-        self.runTicketMachine()
+    def __del__(self):
+        self.db.closeDB()
 
 
     @abstractmethod

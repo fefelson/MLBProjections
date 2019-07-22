@@ -11,7 +11,6 @@ import MLBProjections.MLBProjections.Models.BaseballDiamond as BD
 import MLBProjections.MLBProjections.Environ as ENV
 from MLBProjections.MLBProjections.Utils.UpdateMixIn import UpdateMixIn
 import MLBProjections.MLBProjections.Utils.ResultParse as RP
-import MLBProjections.MLBProjections.Models.DownloadManager as DM
 
 # for debugging
 from pprint import pprint
@@ -128,7 +127,7 @@ pitchLocationsTable.addIndex("x_y", "x_value, y_value")
 ###############
 
 
-### PitchContacts Table
+### Pitches Table
 pitchesTable = TB.Table("pitches")
     ### Primary Key
 pitchesTable.addPk("pitch_id","INT")
@@ -150,6 +149,43 @@ pitchesTable.addCol("pitch_velocity", "INT")
     ### Table Indexes
 pitchesTable.addIndex("pitcher_pitch", "pitcher_id, game_id")
 pitchesTable.addIndex("batter_pitch", "batter_id, game_id")
+###############
+
+
+### PitchContacts Table
+pitchContactsTable = TB.Table("pitch_contacts")
+    ### Primary Key
+pitchContactsTable.addPk("pitch_contact_id","INT")
+    ## Foreign Keys
+pitchContactsTable.addFk("game_id", "games", "game_id")
+pitchContactsTable.addFk("pitcher_id", "pro_players", "player_id")
+pitchContactsTable.addFk("batter_id", "pro_players", "player_id")
+pitchContactsTable.addFk("pitch_type_id", "pitch_types", "pitch_type_id")
+pitchContactsTable.addFk("pitch_result_id", "pitch_results", "pitch_result_id")
+pitchContactsTable.addCol("ab_type_id", "INT", True)
+    ### Table Cols
+pitchContactsTable.addCol("pitch_num", "INT")
+pitchContactsTable.addCol("box", "INT")
+pitchContactsTable.addCol("turn", "INT")
+pitchContactsTable.addCol("sequence", "INT")
+pitchContactsTable.addCol("pitch_velocity", "INT")
+pitchContactsTable.addCol("balls", "INT")
+pitchContactsTable.addCol("strikes", "INT")
+pitchContactsTable.addCol("outs", "INT")
+pitchContactsTable.addCol("side", "INT")
+pitchContactsTable.addCol("first_base", "INT")
+pitchContactsTable.addCol("second_base", "INT")
+pitchContactsTable.addCol("third_base", "INT")
+pitchContactsTable.addCol("hit_style", "INT", True)
+pitchContactsTable.addCol("hit_hardness", "INT", True)
+pitchContactsTable.addCol("hit_angle", "INT", True)
+pitchContactsTable.addCol("hit_distance", "INT", True)
+    ### Table Indexes
+pitchContactsTable.addIndex("pitcher_pitch", "pitcher_id, side, balls, strikes, first_base, second_base, third_base, sequence, turn")
+pitchContactsTable.addIndex("batter_pitch", "batter_id, side, strikes, balls, first_base, second_base, third_base, sequence, turn")
+pitchContactsTable.addIndex("pitcher_contact", "pitcher_id, side, pitch_type_id, pitch_velocity, box, hit_style, hit_hardness, hit_angle, hit_distance")
+pitchContactsTable.addIndex("batter_contact", "batter_id, side, pitch_type_id, pitch_velocity, box, hit_style, hit_hardness, hit_angle, hit_distance")
+
 ###############
 
 
@@ -244,6 +280,23 @@ pitchReplaceTable.addCol("inning", "INT")
 ###############
 
 
+### contactAtBatsTable Table
+contactAtBatsTable = TB.Table("contact_at_bats")
+    ### Primary Key
+contactAtBatsTable.addPk("c_a_b_id", "INT")
+    ### Foreign Keys
+contactAtBatsTable.addFk("team_id", "pro_teams", "team_id")
+    ### Table Cols
+contactAtBatsTable.addCol("hit_style", "INT")
+contactAtBatsTable.addCol("hit_hardness", "INT")
+contactAtBatsTable.addCol("hit_angle", "INT")
+contactAtBatsTable.addCol("hit_distance", "INT")
+contactAtBatsTable.addFk("ab_type_id", "ab_types", "ab_type_id")
+    ### Table Indexes
+contactAtBatsTable.addIndex("team_defense", "team_id, hit_style, hit_hardness, hit_angle, hit_distance")
+###############
+
+
 ### Lineups Table
 lineupsTable = TB.Table("lineups")
     ### Primary Key
@@ -260,9 +313,9 @@ lineupsTable.addCol("pos", "TEXT")
 
 
 ### Bullpens Table
-bullpensTable = TB.Table("bulpens")
+bullpensTable = TB.Table("bullpens")
     ### Primary Key
-bullpensTable.addPk("bulpen_id", "INT")
+bullpensTable.addPk("bullpen_id", "INT")
     ### Foreign Keys
 bullpensTable.addFk("team_id", "pro_teams", "team_id")
 bullpensTable.addFk("player_id", "pro_players", "player_id")
@@ -382,6 +435,116 @@ emptyId = -10
 noRbiId = -5
 
 
+
+
+createTableCmd = """
+                    CREATE TABLE IF NOT EXISTS {0[tableName]} (
+                        player_id INT NOT NULL,
+                        history_id TEXT NOT NULL,
+                        {0[pitch_contact]}
+                        {0[classifierCmd]}
+                        intercept REAL NOT NULL,
+                        {0[tableCmd]}
+                        PRIMARY KEY ( {0[pkCmd]} ),
+                        FOREIGN KEY (player_id) REFERENCES pro_players (player_id) )
+                """
+
+
+pitchesCmd =  """
+                SELECT {0[selectCmd]}
+                FROM pitches AS pitch0
+                INNER JOIN pro_players AS pitcher ON pitch0.pitcher_id = pitcher.player_id
+                INNER JOIN pro_players AS batter ON pitch0.batter_id = batter.player_id
+                INNER JOIN pitch_locations ON pitch0.location_id = pitch_locations.location_id
+                INNER JOIN lineups ON pitch0.game_id = lineups.game_id AND pitch0.batter_id = lineups.player_id
+
+                INNER JOIN (SELECT pitch_id, pitch_type_id AS pitch_type_1, box AS box_1, prev_pitch_id
+                                    FROM pitches
+                                    INNER JOIN pitch_locations
+                                        ON pitches.location_id = pitch_locations.location_id
+                                    ) AS pitch1
+                    ON pitch0.prev_pitch_id = pitch1.pitch_id
+
+                INNER JOIN (SELECT pitch_id, pitch_type_id AS pitch_type_2, box AS box_2, prev_pitch_id
+                                    FROM pitches
+                                    INNER JOIN pitch_locations
+                                        ON pitches.location_id = pitch_locations.location_id
+                                    ) AS pitch2
+                    ON pitch1.prev_pitch_id = pitch2.pitch_id
+
+                WHERE pitcher_id = ?
+                """
+
+
+pitchContactCmd = """
+                    SELECT {0[selectCmd]}
+                    FROM pitches
+                    LEFT OUTER JOIN contacts ON contacts.pitch_id = pitches.pitch_id
+                    INNER JOIN pro_players AS pitcher ON pitches.pitcher_id = pitcher.player_id
+                    INNER JOIN pro_players AS batter ON pitches.batter_id = batter.player_id
+                    INNER JOIN pitch_locations ON pitches.location_id = pitch_locations.location_id
+
+                    WHERE pitcher_id = ?
+                    """
+
+
+pitchRemoveCmd = """
+                    SELECT {0[selectCmd]}
+                    FROM removals
+
+                    WHERE pitcher_id = ?
+                    """
+
+
+pitchReplaceCmd = """
+                    SELECT {0[selectCmd]}
+                    FROM new_pitchers
+
+                    WHERE team_id = ?
+                    """
+
+
+pitchAtBatsCmd = """
+                SELECT ab_results.game_id,
+                        ab_results.play_num,
+                        pitch_num,
+                        runs
+                FROM ab_results
+                INNER JOIN pitches ON ab_results.pitch_id = pitches.pitch_id
+                WHERE pitcher_id = ?
+                """
+
+
+
+
+
+
+
+
+battPitchesCmd = """
+                    SELECT {0[selectCmd]}
+                    FROM pitches
+                    LEFT OUTER JOIN contacts ON contacts.pitch_id = pitches.pitch_id
+                    INNER JOIN pro_players AS pitcher ON pitches.pitcher_id = pitcher.player_id
+                    INNER JOIN pro_players AS batter ON pitches.batter_id = batter.player_id
+                    INNER JOIN pitch_locations ON pitches.location_id = pitch_locations.location_id
+
+                    WHERE batter_id = ?
+                    """
+
+
+battContactsCmd = """
+                    SELECT {0[selectCmd]}
+                    FROM contacts
+                    INNER JOIN pitches ON contacts.pitch_id = pitches.pitch_id
+                    INNER JOIN pro_players AS pitcher ON pitches.pitcher_id = pitcher.player_id
+                    INNER JOIN pro_players AS batter ON pitches.batter_id = batter.player_id
+                    INNER JOIN pitch_locations ON pitches.location_id = pitch_locations.location_id
+
+                    WHERE batter_id = ?
+                    """
+
+
 ################################################################################
 ################################################################################
 
@@ -391,7 +554,6 @@ class MLBDatabase(DB.Database, UpdateMixIn):
     def __init__(self):
         UpdateMixIn.__init__(self)
         DB.Database.__init__(self, ENV.getPath("database", fileName="mlb"))
-        #super().__init__("/home/ededub/Desktop/testDB.db")
 
 
     def getManagerKey(self):
@@ -399,6 +561,7 @@ class MLBDatabase(DB.Database, UpdateMixIn):
 
 
     def update(self):
+        self.loadManagerFile()
         if self.checkUpdate():
             checkDate = self.getItem().date()
             self.insertDates(checkDate)
@@ -459,7 +622,7 @@ class MLBDatabase(DB.Database, UpdateMixIn):
             gameInfo = ENV.jsonFileInfo(gamePath)
 
         # Games Table
-            self.insert(gamesTable, info=gameInfo)
+        self.insert(gamesTable, info=gameInfo)
 
         # Lineups Table
         for side in ("home", "away"):
@@ -478,6 +641,9 @@ class MLBDatabase(DB.Database, UpdateMixIn):
         pitchStaff = {}
         pitchId = -1
         turn = {}
+        pitchTurn = None
+        batterTurn = 1
+        reset = True
         outs = 0
         exOuts = 0
         pitchTeam = homeId
@@ -518,20 +684,24 @@ class MLBDatabase(DB.Database, UpdateMixIn):
 
 
             if play["play_type"] == "PITCH":
-                # Setting table
-                activeTables.append(pitchesTable)
-                # Done for clarity
                 pitcherId = info["pitcher_id"]
                 currentPitcher[int(play["period"])%2] = pitcherId
                 batterId = info["batter_id"]
+
+                if reset:
+                    pitchTurn = turn.get(pitcherId, {})
+                    batterTurn = pitchTurn.get(batterId, 0) + 1
+                    reset = False
+                # Setting table
+                activeTables.append(pitchesTable)
+                # Done for clarity
+
                 # Setting pitchNum using pitchStaff register
                 pitcher = pitchStaff.get(pitcherId, newPitcher.copy())
                 pitcher["pitch_num"] += 1
                 pitchNum = pitcher["pitch_num"]
                 pitchStaff[pitcherId] = pitcher
                 # Setting batterTurn using turn register
-                pitchTurn = turn.get(pitcherId, {})
-                batterTurn = pitchTurn.get(batterId, 0) + 1
                 pitchTurn[batterId] = batterTurn
                 turn[pitcherId] = pitchTurn
                 # Table column entries
@@ -551,7 +721,7 @@ class MLBDatabase(DB.Database, UpdateMixIn):
 
 
             if play["play_type"] == "RESULT":
-
+                reset = True
                 # initialize variables
                 onHook = None
                 rbiId = noRbiId
@@ -792,17 +962,10 @@ class MLBDatabase(DB.Database, UpdateMixIn):
                     self.insert(pitchCountsTable, values=(countId, ball, strike, out))
                     countId += 1
 
-
         for i, values in enumerate(atBatResults):
             self.insert(atBatTypesTable, values=(i, *values))
-
-
         self.commit()
 
-        # for filePath in ENV.yearMonthDay():
-        #     with open(filePath+"scoreboard.json") as fileIn:
-        #         for gamePath in ["{}.json".format(filePath+game["gameId"]) for game in json.load(fileIn)["games"]]:
-        #             self.enterNewGame(filePath, gameId)
 
 
 ################################################################################
@@ -815,20 +978,29 @@ class MLBGame(DB.Database):
         super().__init__(ENV.getPath("game", fileName=gameId))
 
 
+    def notify(self, info):
+        self.openDB()
+        self.executeCmd("DELETE FROM lineups")
+        for team in info["teams"].values():
+            for batter in team["lineup"]:
+                lId = self.nextKey(lineupsTable)
+                self.insert(lineupsTable, values=(lId, info["gameId"], team["teamId"], batter[0], batter[3], 1, batter[-1]))
+        self.commit()
+
+        self.closeDB()
+
 
     def getTableList(self):
-        return (metaTable, gamesTable, proPlayersTable, proTeamsTable, stadiumsTable,
-                locationsTable, pitchTypesTable, pitchResultsTable, resultTypesTable,
-                atBatTypesTable, contactAtBatsTable, lineupsTable, bullpenTable, pitchContactsTable,
-                pitchReplaceTable)
+        return (metaTable, gamesTable, proPlayersTable, proTeamsTable, stadiumsTable, pitchTypesTable,
+               pitchResultsTable,  pitchContactsTable, atBatTypesTable,
+               pitchReplaceTable, lineupsTable, bullpensTable, contactAtBatsTable)
 
 
     def enterFileItems(self, itemType, itemTable):
         itemPath = ENV.getPath(itemType).strip("None.json")
         for itemFile in [itemPath+fileName for fileName in os.listdir(itemPath) if os.path.isfile(itemPath+fileName)]:
-            with open(itemFile) as fileIn:
-                info = json.load(fileIn)
-                self.insert(itemTable, info=info)
+            info = ENV.getJsonInfo(itemFile)
+            self.insert(itemTable, info=info)
 
 
     def seed(self):
@@ -837,30 +1009,12 @@ class MLBGame(DB.Database):
         self.insert(proPlayersTable, values=(-10, "Empty", "Base", -1, None, None, "n", "n", -1, -1, -1.1))
         self.insert(proPlayersTable, values=(-20, "Unearned", "Run", -1, None, None, "n", "n", -1, -1, -1.1))
 
-        self.insert(locationsTable, (-1, -1, -1, -1, False))
-        for i, location in enumerate(pitchLocations):
-            self.insert(locationsTable, (i, *location, sortingHat(*location), str(False if abs(location[0]) > 10000 or abs(location[1]) > 10000 else True)))
+        for values in pitchTypes:
+            self.insert(pitchTypesTable, values=values)
 
-        for info in pitchTypes:
-            self.insert(pitchTypesTable, info)
+        for values in pitchResults:
+            self.insert(pitchResultsTable, values=values)
 
-        for info in pitchResults:
-            self.insert(pitchResultsTable, info)
-
-        self.insert(resultTypesTable, (-1, "Label Error"))
-        for i, info in enumerate(chain(atBatResults, )):#runnerResults, managerResults)):
-            self.insert(resultTypesTable, (i, info[0]))
-
-        for i, info in enumerate(atBatResults):
-            self.insert(atBatTypesTable, (i, i, *info[1:]))
-
-
-
-
-
+        for i, values in enumerate(atBatResults):
+            self.insert(atBatTypesTable, values=(i, *values))
         self.commit()
-
-        # for filePath in ENV.yearMonthDay():
-        #     with open(filePath+"scoreboard.json") as fileIn:
-        #         for gamePath in ["{}.json".format(filePath+game["gameId"]) for game in json.load(fileIn)["games"]]:
-        #             self.enterNewGame(filePath, gameId)

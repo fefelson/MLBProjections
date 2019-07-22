@@ -4,7 +4,7 @@ import json
 
 import MLBProjections.MLBProjections.Environ as ENV
 
-import pprint
+# import pprint
 
 ################################################################################
 ################################################################################
@@ -22,12 +22,13 @@ class UpdateMixIn(metaclass=ABCMeta):
     def __init__(self):
         self.manager = {}
 
+
+    def loadManagerFile(self):
         try:
             with open(ENV.getManagerFile()) as fileIn:
                 self.manager = json.load(fileIn)
         except FileNotFoundError:
             pass
-
 
 
     def getItem(self):
@@ -59,6 +60,7 @@ class UpdateMixIn(metaclass=ABCMeta):
     def updateManagerFile(self):
         key = self.getManagerKey()
         self.manager[key] = str(datetime.datetime.today())
+        print(self.manager)
         self.writeManager()
 
 
